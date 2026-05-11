@@ -1,24 +1,22 @@
 import argparse
-import os
 from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader
 
-from vlm_uncertainty.data.imagenet import build_imagenet_blip_dataset, collate_blip_batch
+from vlm_uncertainty.data.blip_inputs import build_blip_image_dataset, collate_blip_batch
+from vlm_uncertainty.data.imagenet import load_downloaded_imagenet
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Download ImageNet and save BLIP-ready tensor shards.")
-    parser.add_argument("--split", default="validation", help="Dataset split: train, validation, or test.")
+    parser = argparse.ArgumentParser(description="Convert downloaded ImageNet images to BLIP-ready tensors.")
+    parser.add_argument("--split", default="validation", help="Dataset split name used in shard filenames.")
+    parser.add_argument("--dataset-dir", default="data/interim/imagenet/validation")
     parser.add_argument("--checkpoint", default="Salesforce/blip-image-captioning-base")
-    parser.add_argument("--cache-dir", default=None, help="Hugging Face dataset/model cache directory.")
     parser.add_argument("--output-dir", default="data/processed/imagenet-blip")
     parser.add_argument("--prompt", default=None, help="Optional BLIP prompt for conditional captioning.")
     parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("--num-workers", type=int, default=0)
-    parser.add_argument("--hf-token", default=None, help="Hugging Face token. Defaults to HF_TOKEN env var.")
     return parser.parse_args()
 
 
@@ -27,12 +25,10 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    dataset = build_imagenet_blip_dataset(
+    downloaded_dataset = load_downloaded_imagenet(args.dataset_dir)
+    dataset = build_blip_image_dataset(
+        dataset=downloaded_dataset,
         checkpoint=args.checkpoint,
-        split=args.split,
-        cache_dir=args.cache_dir,
-        token=args.hf_token or os.getenv("HF_TOKEN"),
-        max_samples=args.max_samples,
         prompt=args.prompt,
     )
     loader = DataLoader(

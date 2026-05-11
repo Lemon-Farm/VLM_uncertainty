@@ -27,6 +27,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "hf_xet>=1.1.0",
     "pytest>=8.0",
     "ruff>=0.4",
 ]
