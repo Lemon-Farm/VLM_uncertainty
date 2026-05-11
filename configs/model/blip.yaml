@@ -1,0 +1,4 @@
+name: blip
+checkpoint: Salesforce/blip-image-captioning-base
+processor_checkpoint: Salesforce/blip-image-captioning-base
+precision: fp32

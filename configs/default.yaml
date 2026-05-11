@@ -1,0 +1,16 @@
+defaults:
+  - data: imagenet
+  - model: blip
+  - uncertainty: predictive_entropy
+  - metric: default
+  - _self_
+
+seed: 42
+device: auto
+output_dir: outputs
+
+run:
+  name: debug
+  batch_size: 8
+  num_workers: 4
+  max_samples: 32
