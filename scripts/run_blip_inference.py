@@ -18,7 +18,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run BLIP captioning on a saved ImageNet dataset.")
     parser.add_argument(
         "--dataset-dir",
-        default="data/output/imagenet/train",
+        default="data/output/imagenet/validation",
         help="Path to a dataset saved by scripts/prepare_imagenet.py.",
     )
     parser.add_argument("--output", default="outputs/captions.jsonl")
@@ -31,7 +31,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--extract-vision-embeddings",
         type=zero_one_to_bool,
-        default=False,
+        default=True,
         help="Set 1 to save BLIP vision embeddings to one CSV file, 0 otherwise.",
     )
     return parser.parse_args()

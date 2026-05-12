@@ -7,10 +7,10 @@ from vlm_uncertainty.data.imagenet import download_imagenet
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Download ImageNet and save the raw dataset locally.")
-    parser.add_argument("--split", default="train", help="Dataset split: train, validation, or test.")
+    parser.add_argument("--split", default="validation", help="Dataset split: train, validation, or test.")
     parser.add_argument("--cache-dir", default=None, help="Hugging Face dataset cache directory.")
     parser.add_argument("--output-dir", default="data/output/imagenet")
-    parser.add_argument("--max-samples", type=int, default=5000)
+    parser.add_argument("--max-samples", type=int, default=3000)
     parser.add_argument("--hf-token", default=None, help="Hugging Face token. Defaults to HF_TOKEN env var.")
     return parser.parse_args()
 
