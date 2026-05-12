@@ -6,11 +6,19 @@ from vlm_uncertainty.evaluation.runner import run_caption_inference
 from vlm_uncertainty.models.blip import BLIPWrapper
 
 
+def zero_one_to_bool(value: str) -> bool:
+    if value == "1":
+        return True
+    if value == "0":
+        return False
+    raise argparse.ArgumentTypeError("Expected 0 or 1.")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run BLIP captioning on a saved ImageNet dataset.")
     parser.add_argument(
         "--dataset-dir",
-        default="data/interim/imagenet/train",
+        default="data/output/imagenet/train",
         help="Path to a dataset saved by scripts/prepare_imagenet.py.",
     )
     parser.add_argument("--output", default="outputs/captions.jsonl")
@@ -20,6 +28,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-new-tokens", type=int, default=30)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument(
+        "--extract-vision-embeddings",
+        type=zero_one_to_bool,
+        default=False,
+        help="Set 1 to save BLIP vision embeddings to one CSV file, 0 otherwise.",
+    )
     return parser.parse_args()
 
 
@@ -33,7 +47,11 @@ def main() -> None:
         batch_size=args.batch_size,
         num_workers=args.num_workers,
     )
-    model = BLIPWrapper(checkpoint=args.checkpoint, device=args.device)
+    model = BLIPWrapper(
+        checkpoint=args.checkpoint,
+        device=args.device,
+        extract_vision_embeddings=args.extract_vision_embeddings,
+    )
     run_caption_inference(
         model=model,
         dataloader=dataloader,

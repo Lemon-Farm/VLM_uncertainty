@@ -13,9 +13,11 @@ class BLIPWrapper(nn.Module):
         self,
         checkpoint: str = DEFAULT_BLIP_CHECKPOINT,
         device: str | None = None,
+        extract_vision_embeddings: bool = False,
     ) -> None:
         super().__init__()
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
+        self.extract_vision_embeddings = extract_vision_embeddings
         self.processor = BlipProcessor.from_pretrained(checkpoint)
         self.model = BlipForConditionalGeneration.from_pretrained(checkpoint).to(self.device)
         self.model.eval()
