@@ -5,6 +5,7 @@ from vlm_uncertainty.data.imagenet import load_downloaded_imagenet
 from vlm_uncertainty.evaluation.runner import run_caption_inference
 from vlm_uncertainty.models.blip import BLIPWrapper
 
+DATA_PATH = "data/output/ninco/"
 
 def zero_one_to_bool(value: str) -> bool:
     if value == "1":
@@ -18,7 +19,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run BLIP captioning on a saved ImageNet dataset.")
     parser.add_argument(
         "--dataset-dir",
-        default="data/output/imagenet/validation",
+        default=DATA_PATH,
         help="Path to a dataset saved by scripts/prepare_imagenet.py.",
     )
     parser.add_argument("--output", default="outputs/captions.jsonl")
