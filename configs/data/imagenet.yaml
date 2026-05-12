@@ -3,4 +3,3 @@ dataset_id: timm/mini-imagenet
 split: validation
 image_key: image
 interim_dir: data/interim/imagenet
-processed_dir: data/processed/imagenet-blip

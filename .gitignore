@@ -13,14 +13,13 @@ venv/
 
 # Data and experiment artifacts
 data/raw/*
-data/interim/*
-data/processed/*
+data/output/*
 outputs/*
 reports/figures/*
+scripts/test.py
 
 !data/raw/.gitkeep
-!data/interim/.gitkeep
-!data/processed/.gitkeep
+!data/output/.gitkeep
 !outputs/.gitkeep
 !reports/figures/.gitkeep
 
