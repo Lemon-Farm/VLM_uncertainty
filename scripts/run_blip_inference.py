@@ -7,6 +7,7 @@ from vlm_uncertainty.models.blip import BLIPWrapper
 
 DATA_PATH = "data/output/ninco/"
 
+
 def zero_one_to_bool(value: str) -> bool:
     if value == "1":
         return True
@@ -35,6 +36,12 @@ def parse_args() -> argparse.Namespace:
         default=True,
         help="Set 1 to save BLIP vision embeddings to one CSV file, 0 otherwise.",
     )
+    parser.add_argument(
+        "--force-dropout-prob",
+        type=float,
+        default=None,
+        help="If set, force every Dropout module in BLIP to this probability, e.g. 0.1.",
+    )
     return parser.parse_args()
 
 
@@ -52,6 +59,7 @@ def main() -> None:
         checkpoint=args.checkpoint,
         device=args.device,
         extract_vision_embeddings=args.extract_vision_embeddings,
+        force_dropout_prob=args.force_dropout_prob,
     )
     run_caption_inference(
         model=model,

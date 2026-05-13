@@ -14,13 +14,35 @@ class BLIPWrapper(nn.Module):
         checkpoint: str = DEFAULT_BLIP_CHECKPOINT,
         device: str | None = None,
         extract_vision_embeddings: bool = False,
+        force_dropout_prob: float | None = None,
     ) -> None:
         super().__init__()
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         self.extract_vision_embeddings = extract_vision_embeddings
         self.processor = BlipProcessor.from_pretrained(checkpoint)
         self.model = BlipForConditionalGeneration.from_pretrained(checkpoint).to(self.device)
+        if force_dropout_prob is not None:
+            self.set_dropout_probability(force_dropout_prob)
         self.model.eval()
+
+    def set_dropout_probability(self, probability: float = 0.1) -> int:
+        if not 0.0 <= probability <= 1.0:
+            raise ValueError(f"Dropout probability must be between 0 and 1, got {probability}.")
+
+        dropout_types = (
+            nn.Dropout,
+            nn.Dropout1d,
+            nn.Dropout2d,
+            nn.Dropout3d,
+            nn.AlphaDropout,
+            nn.FeatureAlphaDropout,
+        )
+        count = 0
+        for module in self.model.modules():
+            if isinstance(module, dropout_types):
+                module.p = probability
+                count += 1
+        return count
 
     def generate_captions(
         self,
