@@ -4,8 +4,8 @@ from pathlib import Path
 from datasets import Dataset, Features, Image, Value
 
 
-RAW_DIR = Path("data/raw/NINCO/NINCO/NINCO_OOD_classes")
-OUTPUT_DIR = Path("data/output/ninco/")
+RAW_DIR = Path("data/raw/NINCO/NINCO/NINCO_popular_datasets_subsamples/Textures")
+OUTPUT_DIR = Path("data/output/ninco/textures")
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
 

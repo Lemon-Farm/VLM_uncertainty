@@ -6,7 +6,7 @@ from typing import Iterable
 import torch
 from tqdm import tqdm
 
-from vlm_uncertainty.models.blip import BLIPWrapper
+from vlm_uncertainty.models.blip import BLIPWrapper, DEFAULT_CAPTION_PREFIX
 
 
 VISION_EMBEDDING_OUTPUT_DIR = Path("outputs/vision_embeddings")
@@ -29,6 +29,7 @@ def run_caption_inference(
     dataloader: Iterable[dict],
     output_path: str | Path,
     max_new_tokens: int = 30,
+    prefix: str = DEFAULT_CAPTION_PREFIX,
 ) -> None:
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -49,6 +50,7 @@ def run_caption_inference(
                 captions = model.generate_captions(
                     pixel_values=batch["pixel_values"],
                     max_new_tokens=max_new_tokens,
+                    prefix=prefix,
                 )
 
                 for index, caption in zip(batch["indices"].tolist(), captions):
