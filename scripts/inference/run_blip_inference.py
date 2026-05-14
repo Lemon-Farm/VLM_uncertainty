@@ -21,10 +21,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dataset-dir",
         default=DATA_PATH,
-        help="Path to a dataset saved by scripts/prepare_imagenet.py.",
+        help="Path to a dataset saved by scripts/prepare/prepare_imagenet.py.",
     )
     parser.add_argument("--output", default="outputs/captions.jsonl")
     parser.add_argument("--checkpoint", default="Salesforce/blip-image-captioning-base")
+    parser.add_argument(
+        "--lora-adapter",
+        default="diyanigam/lora-blip-finetuned",
+        help="Optional LoRA adapter path or Hugging Face repo id.",
+    )
+    parser.add_argument(
+        "--bayesian-lora-factors",
+        default="outputs/bayesian_lora/kronecker_factors_ID.pt",
+        help="Optional path to saved Bayesian-LoRA Kronecker factors.",
+    )
+    parser.add_argument("--bayesian-lora-prior-var", type=float, default=1.0)
+    parser.add_argument("--bayesian-lora-top-k", type=int, default=5)
+    parser.add_argument("--bayesian-lora-n-lora", type=int, default=None)
+    parser.add_argument("--bayesian-lora-n-kfac", type=int, default=None)
     parser.add_argument("--image-key", default="image")
     parser.add_argument("--device", default=None, help="Device to use, e.g. cpu or cuda.")
     parser.add_argument("--max-new-tokens", type=int, default=2)
@@ -61,6 +75,12 @@ def main() -> None:
         device=args.device,
         extract_vision_embeddings=args.extract_vision_embeddings,
         force_dropout_prob=args.force_dropout_prob,
+        lora_adapter=args.lora_adapter,
+        bayesian_lora_factors=args.bayesian_lora_factors,
+        bayesian_lora_prior_var=args.bayesian_lora_prior_var,
+        bayesian_lora_top_k=args.bayesian_lora_top_k,
+        bayesian_lora_n_lora=args.bayesian_lora_n_lora,
+        bayesian_lora_n_kfac=args.bayesian_lora_n_kfac,
     )
     run_caption_inference(
         model=model,

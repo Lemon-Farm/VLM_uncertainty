@@ -52,12 +52,28 @@ def run_caption_inference(
                     max_new_tokens=max_new_tokens,
                     prefix=prefix,
                 )
+                laplace_lora = None
+                if model.uses_bayesian_lora:
+                    laplace_lora = model.laplace_lora_topk_logits(
+                        pixel_values=batch["pixel_values"],
+                        prefix=prefix,
+                    )
 
-                for index, caption in zip(batch["indices"].tolist(), captions):
+                for row, (index, caption) in enumerate(
+                    zip(batch["indices"].tolist(), captions)
+                ):
                     record = {
                         "index": index,
                         "caption": caption,
                     }
+                    if laplace_lora is not None:
+                        record["laplace_lora"] = {
+                            "token_ids": laplace_lora["token_ids"][row],
+                            "tokens": laplace_lora["tokens"][row],
+                            "mu": laplace_lora["mu"][row],
+                            "sigma": laplace_lora["sigma"][row],
+                            "uncertainty": laplace_lora["uncertainty"][row],
+                        }
                     output_file.write(json.dumps(record, ensure_ascii=False) + "\n")
 
                 if model.extract_vision_embeddings:

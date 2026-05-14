@@ -22,6 +22,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset-dir", default=DATASET_DIR)
     parser.add_argument("--output", default=OUTPUT_PATH)
     parser.add_argument("--checkpoint", default=CHECKPOINT)
+    parser.add_argument(
+        "--lora-adapter",
+        default=None,
+        help="Optional LoRA adapter path or Hugging Face repo id.",
+    )
     parser.add_argument("--image-key", default="image")
     parser.add_argument("--device", default=None)
     parser.add_argument("--batch-size", type=int, default=32)
@@ -50,6 +55,7 @@ def main() -> None:
         checkpoint=args.checkpoint,
         device=args.device,
         force_dropout_prob=DROPOUT_PROB,
+        lora_adapter=args.lora_adapter,
     )
 
     with output_path.open("w", encoding="utf-8", newline="") as output_file:
