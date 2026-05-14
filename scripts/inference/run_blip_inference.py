@@ -5,7 +5,7 @@ from vlm_uncertainty.data.imagenet import load_downloaded_imagenet
 from vlm_uncertainty.evaluation.runner import run_caption_inference
 from vlm_uncertainty.models.blip import BLIPWrapper, DEFAULT_CAPTION_PREFIX
 
-DATA_PATH = "data/output/ninco/textures"
+DATA_PATH = "data/output/imagenet/validation"
 
 
 def zero_one_to_bool(value: str) -> bool:
@@ -32,18 +32,30 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--bayesian-lora-factors",
-        default="outputs/bayesian_lora/kronecker_factors_ID.pt",
+        default="outputs/bayesian_lora/kronecker_factors.pt",
         help="Optional path to saved Bayesian-LoRA Kronecker factors.",
     )
     parser.add_argument("--bayesian-lora-prior-var", type=float, default=1.0)
-    parser.add_argument("--bayesian-lora-top-k", type=int, default=5)
+    parser.add_argument("--bayesian-lora-top-k", type=int, default=2)
+    parser.add_argument(
+        "--bayesian-lora-token-step",
+        type=int,
+        default=2,
+        help="Target next-token step for Bayesian-LoRA uncertainty. 1 is immediate next token.",
+    )
+    parser.add_argument(
+        "--bayesian-lora-batch-size",
+        type=int,
+        default=2,
+        help="Micro-batch size for Bayesian-LoRA Jacobian/variance computation.",
+    )
     parser.add_argument("--bayesian-lora-n-lora", type=int, default=None)
     parser.add_argument("--bayesian-lora-n-kfac", type=int, default=None)
     parser.add_argument("--image-key", default="image")
     parser.add_argument("--device", default=None, help="Device to use, e.g. cpu or cuda.")
     parser.add_argument("--max-new-tokens", type=int, default=2)
     parser.add_argument("--prefix", default=DEFAULT_CAPTION_PREFIX)
-    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument(
         "--extract-vision-embeddings",
@@ -79,6 +91,8 @@ def main() -> None:
         bayesian_lora_factors=args.bayesian_lora_factors,
         bayesian_lora_prior_var=args.bayesian_lora_prior_var,
         bayesian_lora_top_k=args.bayesian_lora_top_k,
+        bayesian_lora_token_step=args.bayesian_lora_token_step,
+        bayesian_lora_batch_size=args.bayesian_lora_batch_size,
         bayesian_lora_n_lora=args.bayesian_lora_n_lora,
         bayesian_lora_n_kfac=args.bayesian_lora_n_kfac,
     )

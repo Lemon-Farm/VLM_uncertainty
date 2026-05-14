@@ -1,3 +1,4 @@
+import warnings
 from pathlib import Path
 from typing import Literal
 
@@ -7,7 +8,7 @@ from transformers import BatchEncoding, BlipForConditionalGeneration, BlipProces
 
 
 DEFAULT_BLIP_CHECKPOINT = "Salesforce/blip-image-captioning-base"
-DEFAULT_CAPTION_PREFIX = "In exactly one word, this is an image of"
+DEFAULT_CAPTION_PREFIX = "The main object in this image is"
 
 
 class BLIPWrapper(nn.Module):
@@ -21,7 +22,9 @@ class BLIPWrapper(nn.Module):
         bayesian_lora_factors: str | Path | None = None,
         bayesian_lora_prior_var: float = 1.0,
         bayesian_lora_top_k: int = 5,
-        bayesian_lora_n_lora: int | None = 32,
+        bayesian_lora_batch_size: int = 2,
+        bayesian_lora_token_step: int = 2,
+        bayesian_lora_n_lora: int | None = None,
         bayesian_lora_n_kfac: int | None = None,
     ) -> None:
         super().__init__()
@@ -30,6 +33,8 @@ class BLIPWrapper(nn.Module):
         self.lora_adapter = lora_adapter
         self.bayesian_lora_prior_var = bayesian_lora_prior_var
         self.bayesian_lora_top_k = bayesian_lora_top_k
+        self.bayesian_lora_batch_size = bayesian_lora_batch_size
+        self.bayesian_lora_token_step = bayesian_lora_token_step
         self.bayesian_lora_n_lora = bayesian_lora_n_lora
         self.bayesian_lora_n_kfac = bayesian_lora_n_kfac
         self.processor = BlipProcessor.from_pretrained(checkpoint)
@@ -71,6 +76,20 @@ class BLIPWrapper(nn.Module):
             raise ValueError("bayesian_lora_factors requires lora_adapter to be set.")
 
         factors_blob = torch.load(Path(factors_path), map_location=self.device)
+        if isinstance(factors_blob, dict):
+            factor_token_step = factors_blob.get("token_step")
+            if factor_token_step is None:
+                warnings.warn(
+                    "Bayesian-LoRA factors do not include token_step metadata. "
+                    "Recompute factors after changing bayesian_lora_token_step.",
+                    stacklevel=2,
+                )
+            elif int(factor_token_step) != self.bayesian_lora_token_step:
+                raise ValueError(
+                    "Bayesian-LoRA factors were prepared for "
+                    f"token_step={factor_token_step}, but inference uses "
+                    f"token_step={self.bayesian_lora_token_step}."
+                )
         factors = (
             factors_blob.get("factors", factors_blob)
             if isinstance(factors_blob, dict)
@@ -150,8 +169,35 @@ class BLIPWrapper(nn.Module):
                 [prefix] * pixel_values.shape[0],
                 return_tensors="pt",
                 padding=True,
+                add_special_tokens=False,
             )
             inputs.update({key: value.to(self.device) for key, value in text_inputs.items()})
+        return inputs
+
+    def inputs_for_token_step(
+        self,
+        pixel_values: torch.Tensor,
+        prefix: str,
+        token_step: int,
+    ) -> BatchEncoding:
+        if token_step < 1:
+            raise ValueError(f"token_step must be at least 1, got {token_step}.")
+
+        inputs = BatchEncoding(self.generation_inputs(pixel_values, prefix))
+        if "input_ids" not in inputs:
+            raise ValueError("Token-step logits require a non-empty text prefix.")
+
+        for _ in range(token_step - 1):
+            with torch.no_grad():
+                next_token = self.model(**inputs).logits[:, -1, :].argmax(dim=-1, keepdim=True)
+            inputs["input_ids"] = torch.cat([inputs["input_ids"], next_token], dim=1)
+            if "attention_mask" in inputs:
+                next_attention = torch.ones_like(next_token, device=inputs["attention_mask"].device)
+                inputs["attention_mask"] = torch.cat(
+                    [inputs["attention_mask"], next_attention],
+                    dim=1,
+                )
+
         return inputs
 
     def generate_captions(
@@ -175,10 +221,29 @@ class BLIPWrapper(nn.Module):
         pixel_values: torch.Tensor,
         prefix: str = DEFAULT_CAPTION_PREFIX,
     ) -> dict[str, list]:
+        if self.bayesian_lora_batch_size < 1:
+            raise ValueError("bayesian_lora_batch_size must be at least 1.")
+        if pixel_values.shape[0] > self.bayesian_lora_batch_size:
+            merged = {
+                "token_ids": [],
+                "tokens": [],
+                "mu": [],
+                "sigma": [],
+                "uncertainty": [],
+            }
+            for start in range(0, pixel_values.shape[0], self.bayesian_lora_batch_size):
+                end = start + self.bayesian_lora_batch_size
+                chunk = self.laplace_lora_topk_logits(pixel_values[start:end], prefix)
+                for key, value in chunk.items():
+                    merged[key].extend(value)
+            return merged
+
         if self.bayesian_lora_factors is None:
             raise RuntimeError("Bayesian-LoRA factors are not loaded.")
         if self.bayesian_lora_top_k < 1:
             raise ValueError("bayesian_lora_top_k must be at least 1.")
+        if self.bayesian_lora_top_k < 2:
+            raise ValueError("Bayesian-LoRA top-2 gap uncertainty requires top_k >= 2.")
 
         try:
             from bayesian_lora import variance
@@ -187,9 +252,11 @@ class BLIPWrapper(nn.Module):
             raise RuntimeError("Install bayesian-lora to use Laplace-LoRA uncertainty.") from error
 
         self.model.eval()
-        batch_inputs = BatchEncoding(self.generation_inputs(pixel_values, prefix))
-        if "input_ids" not in batch_inputs:
-            raise ValueError("Laplace-LoRA uncertainty requires a non-empty text prefix.")
+        batch_inputs = self.inputs_for_token_step(
+            pixel_values,
+            prefix,
+            self.bayesian_lora_token_step,
+        )
 
         with torch.no_grad():
             logits = self.model(**batch_inputs).logits[:, -1, :].float()
@@ -228,6 +295,7 @@ class BLIPWrapper(nn.Module):
             )
 
         sigma = torch.sqrt(torch.diagonal(covariance, dim1=-2, dim2=-1).clamp_min(0.0))
+        uncertainty = mu[:, 0] - mu[:, 1]
         token_ids_cpu = token_ids.detach().cpu()
         tokens = [
             self.processor.tokenizer.convert_ids_to_tokens(row)
@@ -240,7 +308,7 @@ class BLIPWrapper(nn.Module):
             "tokens": tokens,
             "mu": mu.detach().cpu().tolist(),
             "sigma": sigma_cpu.tolist(),
-            "uncertainty": sigma_cpu.mean(dim=1).tolist(),
+            "uncertainty": uncertainty.detach().cpu().tolist(),
         }
 
     def mc_dropout_predictive_entropy(

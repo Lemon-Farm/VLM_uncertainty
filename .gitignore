@@ -15,7 +15,6 @@ venv/
 data/raw/*
 data/output/*
 outputs/*
-reports/figures/*
 scripts/test.py
 
 !data/raw/.gitkeep

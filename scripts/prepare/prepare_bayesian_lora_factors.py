@@ -2,7 +2,6 @@ import argparse
 from pathlib import Path
 
 import torch
-from transformers import BatchEncoding
 
 from vlm_uncertainty.data.blip_inputs import build_blip_image_dataloader
 from vlm_uncertainty.data.imagenet import load_downloaded_imagenet
@@ -23,10 +22,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--image-key", default="image")
     parser.add_argument("--device", default=None)
     parser.add_argument("--prefix", default=DEFAULT_CAPTION_PREFIX)
-    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--max-samples", type=int, default=None)
-    parser.add_argument("--top-k", type=int, default=5)
+    parser.add_argument("--top-k", type=int, default=2)
+    parser.add_argument(
+        "--token-step",
+        type=int,
+        default=2,
+        help="Target next-token step for Bayesian-LoRA factors. 1 is immediate next token.",
+    )
     parser.add_argument("--n-kfac", type=int, default=10)
     parser.add_argument("--lr-threshold", type=int, default=512)
     return parser.parse_args()
@@ -64,14 +69,11 @@ def main() -> None:
         raise RuntimeError("Install bayesian-lora to prepare K-FAC factors.") from error
 
     def forward_call(model: torch.nn.Module, batch: dict) -> torch.Tensor:
-        inputs = BatchEncoding(
-            wrapper.generation_inputs(
-                pixel_values=batch["pixel_values"],
-                prefix=args.prefix,
-            )
+        inputs = wrapper.inputs_for_token_step(
+            pixel_values=batch["pixel_values"],
+            prefix=args.prefix,
+            token_step=args.token_step,
         )
-        if "input_ids" not in inputs:
-            raise ValueError("Bayesian-LoRA factor preparation requires a non-empty prefix.")
 
         logits = model(**inputs).logits[:, -1, :].float()
         topk_logits = torch.topk(
@@ -102,6 +104,7 @@ def main() -> None:
             "n_kfac": args.n_kfac,
             "lr_threshold": args.lr_threshold,
             "top_k": args.top_k,
+            "token_step": args.token_step,
             "checkpoint": args.checkpoint,
             "lora_adapter": args.lora_adapter,
         },
