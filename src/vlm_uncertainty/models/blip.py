@@ -8,7 +8,39 @@ from transformers import BatchEncoding, BlipForConditionalGeneration, BlipProces
 
 
 DEFAULT_BLIP_CHECKPOINT = "Salesforce/blip-image-captioning-base"
-DEFAULT_CAPTION_PREFIX = "The main object in this image is"
+DEFAULT_CAPTION_PREFIX = "This is a photo of a"
+SOFTMAX_ENTROPY_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "been",
+        "being",
+        "by",
+        "for",
+        "from",
+        "in",
+        "is",
+        "it",
+        "its",
+        "of",
+        "on",
+        "or",
+        "that",
+        "the",
+        "these",
+        "this",
+        "those",
+        "to",
+        "was",
+        "were",
+        "with",
+    }
+)
 
 
 class BLIPWrapper(nn.Module):
@@ -215,6 +247,71 @@ class BLIPWrapper(nn.Module):
             )
 
         return self.processor.batch_decode(output_ids, skip_special_tokens=True)
+
+    def softmax_entropy_token_mask(self, token_ids: torch.Tensor) -> torch.Tensor:
+        special_token_ids = set(self.processor.tokenizer.all_special_ids)
+        token_ids_cpu = token_ids.detach().cpu()
+        rows = []
+        for row in token_ids_cpu.tolist():
+            tokens = self.processor.tokenizer.convert_ids_to_tokens(row)
+            rows.append(
+                [
+                    token_id not in special_token_ids
+                    and token.replace("##", "").strip(" .,;:!?\"'()[]{}").lower()
+                    not in SOFTMAX_ENTROPY_STOPWORDS
+                    for token_id, token in zip(row, tokens)
+                ]
+            )
+        return torch.tensor(rows, dtype=torch.bool, device=token_ids.device)
+
+    def softmax_entropy(
+        self,
+        pixel_values: torch.Tensor,
+        max_new_tokens: int = 30,
+        prefix: str = DEFAULT_CAPTION_PREFIX,
+        exclude_stopwords: bool = False,
+    ) -> dict[str, torch.Tensor | list[str]]:
+        if max_new_tokens < 1:
+            raise ValueError(f"max_new_tokens must be at least 1, got {max_new_tokens}.")
+
+        self.model.eval()
+
+        with torch.no_grad():
+            outputs = self.model.generate(
+                **self.generation_inputs(pixel_values, prefix),
+                max_new_tokens=max_new_tokens,
+                return_dict_in_generate=True,
+                output_scores=True,
+            )
+            probabilities = torch.stack(
+                [torch.softmax(score.float(), dim=-1) for score in outputs.scores],
+                dim=1,
+            )
+            token_entropy = -torch.sum(
+                probabilities * torch.log(probabilities.clamp_min(1e-12)),
+                dim=-1,
+            )
+            generated_token_ids = outputs.sequences[:, -probabilities.shape[1] :]
+            token_mask = torch.ones_like(token_entropy, dtype=torch.bool)
+            if exclude_stopwords:
+                token_mask = self.softmax_entropy_token_mask(generated_token_ids)
+            token_count = token_mask.sum(dim=1)
+            masked_entropy = token_entropy.masked_fill(~token_mask, 0.0)
+            caption_uncertainty = masked_entropy.sum(dim=1) / token_count.clamp_min(1)
+            caption_uncertainty = torch.where(
+                token_count > 0,
+                caption_uncertainty,
+                token_entropy.mean(dim=1),
+            )
+            captions = self.processor.batch_decode(outputs.sequences, skip_special_tokens=True)
+
+        return {
+            "caption_uncertainty": caption_uncertainty.detach().cpu(),
+            "token_entropy": token_entropy.detach().cpu(),
+            "used_token_count": token_count.detach().cpu(),
+            "captions": captions,
+            "generated_steps": torch.tensor(probabilities.shape[1]),
+        }
 
     def laplace_lora_topk_logits(
         self,

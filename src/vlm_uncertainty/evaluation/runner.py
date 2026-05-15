@@ -30,6 +30,8 @@ def run_caption_inference(
     output_path: str | Path,
     max_new_tokens: int = 30,
     prefix: str = DEFAULT_CAPTION_PREFIX,
+    compute_softmax_entropy: bool = False,
+    exclude_softmax_entropy_stopwords: bool = False,
 ) -> None:
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -47,11 +49,21 @@ def run_caption_inference(
     with output_path.open("w", encoding="utf-8") as output_file:
         try:
             for batch in tqdm(dataloader, desc="BLIP inference", total=len(dataloader)):
-                captions = model.generate_captions(
-                    pixel_values=batch["pixel_values"],
-                    max_new_tokens=max_new_tokens,
-                    prefix=prefix,
-                )
+                softmax_entropy = None
+                if compute_softmax_entropy:
+                    softmax_entropy = model.softmax_entropy(
+                        pixel_values=batch["pixel_values"],
+                        max_new_tokens=max_new_tokens,
+                        prefix=prefix,
+                        exclude_stopwords=exclude_softmax_entropy_stopwords,
+                    )
+                    captions = softmax_entropy["captions"]
+                else:
+                    captions = model.generate_captions(
+                        pixel_values=batch["pixel_values"],
+                        max_new_tokens=max_new_tokens,
+                        prefix=prefix,
+                    )
                 laplace_lora = None
                 if model.uses_bayesian_lora:
                     laplace_lora = model.laplace_lora_topk_logits(
@@ -66,6 +78,14 @@ def run_caption_inference(
                         "index": index,
                         "caption": caption,
                     }
+                    if softmax_entropy is not None:
+                        record["softmax_entropy"] = {
+                            "token_entropy": softmax_entropy["token_entropy"][row].tolist(),
+                            "uncertainty": softmax_entropy["caption_uncertainty"][row].item(),
+                            "generated_steps": softmax_entropy["generated_steps"].item(),
+                            "used_token_count": softmax_entropy["used_token_count"][row].item(),
+                            "excluded_stopwords": exclude_softmax_entropy_stopwords,
+                        }
                     if laplace_lora is not None:
                         record["laplace_lora"] = {
                             "token_ids": laplace_lora["token_ids"][row],
