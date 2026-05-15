@@ -5,7 +5,7 @@ from vlm_uncertainty.data.imagenet import load_downloaded_imagenet
 from vlm_uncertainty.evaluation.runner import run_caption_inference
 from vlm_uncertainty.models.blip import BLIPWrapper, DEFAULT_CAPTION_PREFIX
 
-DATA_PATH = "data/output/imagenet/validation"
+DATA_PATH = "data/output/ninco/textures"
 
 
 def zero_one_to_bool(value: str) -> bool:

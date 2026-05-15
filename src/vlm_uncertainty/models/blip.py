@@ -242,8 +242,6 @@ class BLIPWrapper(nn.Module):
             raise RuntimeError("Bayesian-LoRA factors are not loaded.")
         if self.bayesian_lora_top_k < 1:
             raise ValueError("bayesian_lora_top_k must be at least 1.")
-        if self.bayesian_lora_top_k < 2:
-            raise ValueError("Bayesian-LoRA top-2 gap uncertainty requires top_k >= 2.")
 
         try:
             from bayesian_lora import variance
@@ -295,7 +293,6 @@ class BLIPWrapper(nn.Module):
             )
 
         sigma = torch.sqrt(torch.diagonal(covariance, dim1=-2, dim2=-1).clamp_min(0.0))
-        uncertainty = mu[:, 0] - mu[:, 1]
         token_ids_cpu = token_ids.detach().cpu()
         tokens = [
             self.processor.tokenizer.convert_ids_to_tokens(row)
@@ -308,7 +305,7 @@ class BLIPWrapper(nn.Module):
             "tokens": tokens,
             "mu": mu.detach().cpu().tolist(),
             "sigma": sigma_cpu.tolist(),
-            "uncertainty": uncertainty.detach().cpu().tolist(),
+            "uncertainty": sigma_cpu.mean(dim=1).tolist(),
         }
 
     def mc_dropout_predictive_entropy(

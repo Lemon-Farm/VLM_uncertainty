@@ -110,8 +110,8 @@ def plot_roc(
 ) -> tuple[Path, float, tuple[float, float] | None]:
     output_path = output_dir / "blora_uncertainty_roc.png"
 
-    y_true = np.concatenate([np.zeros_like(-id_scores), np.ones_like(-ood_scores)])
-    scores = np.concatenate([-id_scores, -ood_scores])
+    y_true = np.concatenate([np.zeros_like(id_scores), np.ones_like(ood_scores)])
+    scores = np.concatenate([id_scores, ood_scores])
     fpr, tpr, _ = roc_curve(y_true, scores)
     roc_auc = auc(fpr, tpr)
 
