@@ -1,79 +1,45 @@
-import warnings
 from pathlib import Path
-from typing import Literal
+from types import SimpleNamespace
+import warnings
 
 import torch
+from transformers import BatchEncoding
+from PIL import Image
 from torch import nn
-from transformers import BatchEncoding, BlipForConditionalGeneration, BlipProcessor
+from transformers import BlipForQuestionAnswering, BlipProcessor
 
 
-DEFAULT_BLIP_CHECKPOINT = "Salesforce/blip-image-captioning-base"
-DEFAULT_CAPTION_PREFIX = "This is a photo of a"
-SOFTMAX_ENTROPY_STOPWORDS = frozenset(
-    {
-        "a",
-        "an",
-        "and",
-        "are",
-        "as",
-        "at",
-        "be",
-        "been",
-        "being",
-        "by",
-        "for",
-        "from",
-        "in",
-        "is",
-        "it",
-        "its",
-        "of",
-        "on",
-        "or",
-        "that",
-        "the",
-        "these",
-        "this",
-        "those",
-        "to",
-        "was",
-        "were",
-        "with",
-    }
-)
-
-
-class BLIPWrapper(nn.Module):
+class BLIPVQAWrapper(nn.Module):
     def __init__(
         self,
-        checkpoint: str = DEFAULT_BLIP_CHECKPOINT,
+        checkpoint: str,
         device: str | None = None,
-        extract_vision_embeddings: bool = False,
-        force_dropout_prob: float | None = None,
         lora_adapter: str | None = None,
         bayesian_lora_factors: str | Path | None = None,
         bayesian_lora_prior_var: float = 1.0,
         bayesian_lora_top_k: int = 5,
         bayesian_lora_batch_size: int = 2,
-        bayesian_lora_token_step: int = 2,
+        bayesian_lora_token_step: int = 1,
+        bayesian_lora_target_keywords: tuple[str, ...] = (
+            "text_decoder&query.lora",
+            "text_decoder&value.lora",
+        ),
         bayesian_lora_n_lora: int | None = None,
         bayesian_lora_n_kfac: int | None = None,
     ) -> None:
         super().__init__()
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
-        self.extract_vision_embeddings = extract_vision_embeddings
         self.lora_adapter = lora_adapter
         self.bayesian_lora_prior_var = bayesian_lora_prior_var
         self.bayesian_lora_top_k = bayesian_lora_top_k
         self.bayesian_lora_batch_size = bayesian_lora_batch_size
         self.bayesian_lora_token_step = bayesian_lora_token_step
+        self.bayesian_lora_target_keywords = bayesian_lora_target_keywords
         self.bayesian_lora_n_lora = bayesian_lora_n_lora
         self.bayesian_lora_n_kfac = bayesian_lora_n_kfac
         self.processor = BlipProcessor.from_pretrained(checkpoint)
         self.model = self.load_model(checkpoint, lora_adapter).to(self.device)
         self.bayesian_lora_factors = self.load_bayesian_lora_factors(bayesian_lora_factors)
-        if force_dropout_prob is not None:
-            self.set_dropout_probability(force_dropout_prob)
         self.model.eval()
 
     def load_model(
@@ -87,16 +53,42 @@ class BLIPWrapper(nn.Module):
                 torch.float16 if self.device.type == "cuda" else torch.float32
             )
 
-        model = BlipForConditionalGeneration.from_pretrained(checkpoint, **model_kwargs)
+        model = BlipForQuestionAnswering.from_pretrained(checkpoint, **model_kwargs)
         if lora_adapter is None:
             return model
 
         from peft import PeftModel
 
         model = PeftModel.from_pretrained(model, lora_adapter, is_trainable=True)
+        trainable_lora_count = 0
         for name, parameter in model.named_parameters():
-            parameter.requires_grad = "lora" in name.lower()
+            parameter.requires_grad = self.is_target_lora_parameter(name)
+            trainable_lora_count += int(parameter.requires_grad)
+        if trainable_lora_count == 0:
+            raise ValueError(
+                "No LoRA parameters matched bayesian_lora_target_keywords="
+                f"{self.bayesian_lora_target_keywords}."
+            )
         return model
+
+    def is_target_lora_parameter(self, name: str) -> bool:
+        name = name.lower()
+        return "lora" in name and self.matches_lora_target(name)
+
+    def matches_lora_target(self, name: str) -> bool:
+        name = name.lower()
+        for pattern in self.bayesian_lora_target_keywords:
+            parts = [part.strip().lower() for part in pattern.split("&") if part.strip()]
+            if parts and all(part in name for part in parts):
+                return True
+        return False
+
+    def target_lora_module_names(self) -> list[str]:
+        return [
+            name
+            for name, module in self.named_modules()
+            if isinstance(module, nn.Linear) and self.matches_lora_target(name)
+        ]
 
     def load_bayesian_lora_factors(
         self,
@@ -165,120 +157,160 @@ class BLIPWrapper(nn.Module):
                     return int(factor.shape[-1])
         raise ValueError("Could not infer K-FAC rank. Pass bayesian_lora_n_kfac explicitly.")
 
-    def set_dropout_probability(self, probability: float = 0.1) -> int:
-        if not 0.0 <= probability <= 1.0:
-            raise ValueError(f"Dropout probability must be between 0 and 1, got {probability}.")
+    def decoder_start_token_id(self) -> int:
+        token_id = getattr(self.model.config.text_config, "bos_token_id", None)
+        if token_id is None:
+            token_id = self.processor.tokenizer.bos_token_id
+        if token_id is None:
+            token_id = self.processor.tokenizer.cls_token_id
+        if token_id is None:
+            raise ValueError("Could not infer decoder start token id.")
+        return int(token_id)
 
-        count = 0
-        for module in self.dropout_modules():
-            module.p = probability
-            count += 1
-        return count
-
-    def dropout_modules(self) -> list[nn.Module]:
-        dropout_types = (
-            nn.Dropout,
-            nn.Dropout1d,
-            nn.Dropout2d,
-            nn.Dropout3d,
-            nn.AlphaDropout,
-            nn.FeatureAlphaDropout,
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        pixel_values: torch.Tensor,
+        decoder_input_ids: torch.Tensor,
+        decoder_attention_mask: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        **kwargs: object,
+    ) -> SimpleNamespace:
+        model = self.model.get_base_model() if hasattr(self.model, "get_base_model") else self.model
+        vision_outputs = model.vision_model(
+            pixel_values=pixel_values,
+            return_dict=True,
         )
-        return [module for module in self.model.modules() if isinstance(module, dropout_types)]
+        image_embeds = vision_outputs.last_hidden_state
+        image_attention_mask = torch.ones(
+            image_embeds.size()[:-1],
+            dtype=torch.long,
+            device=image_embeds.device,
+        )
+        question_outputs = model.text_encoder(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            encoder_hidden_states=image_embeds,
+            encoder_attention_mask=image_attention_mask,
+            return_dict=True,
+        )
+        if decoder_attention_mask is None:
+            decoder_attention_mask = torch.ones_like(decoder_input_ids)
+        answer_outputs = model.text_decoder(
+            input_ids=decoder_input_ids,
+            attention_mask=decoder_attention_mask,
+            encoder_hidden_states=question_outputs.last_hidden_state,
+            encoder_attention_mask=attention_mask,
+            return_dict=True,
+            reduction="mean",
+        )
+        return SimpleNamespace(logits=answer_outputs.logits)
 
-    def set_dropout_train_mode(self, enabled: bool = True) -> int:
-        count = 0
-        for module in self.dropout_modules():
-            module.train(enabled)
-            count += 1
-        return count
-
-    def generation_inputs(self, pixel_values: torch.Tensor, prefix: str) -> dict[str, torch.Tensor]:
-        pixel_values = pixel_values.to(self.device)
-        inputs = {"pixel_values": pixel_values}
-        if prefix:
-            text_inputs = self.processor.tokenizer(
-                [prefix] * pixel_values.shape[0],
-                return_tensors="pt",
-                padding=True,
-                add_special_tokens=False,
-            )
-            inputs.update({key: value.to(self.device) for key, value in text_inputs.items()})
+    def question_inputs(
+        self,
+        pixel_values: torch.Tensor,
+        question: str,
+    ) -> dict[str, torch.Tensor]:
+        text_inputs = self.processor.tokenizer(
+            [question] * pixel_values.shape[0],
+            return_tensors="pt",
+            padding=True,
+        )
+        inputs = {
+            "pixel_values": pixel_values.to(self.device),
+            **{key: value.to(self.device) for key, value in text_inputs.items()},
+        }
         return inputs
 
     def inputs_for_token_step(
         self,
         pixel_values: torch.Tensor,
-        prefix: str,
+        question: str,
         token_step: int,
     ) -> BatchEncoding:
         if token_step < 1:
             raise ValueError(f"token_step must be at least 1, got {token_step}.")
 
-        inputs = BatchEncoding(self.generation_inputs(pixel_values, prefix))
-        if "input_ids" not in inputs:
-            raise ValueError("Token-step logits require a non-empty text prefix.")
+        inputs = BatchEncoding(self.question_inputs(pixel_values, question))
+        decoder_input_ids = torch.full(
+            (pixel_values.shape[0], 1),
+            self.decoder_start_token_id(),
+            dtype=torch.long,
+            device=self.device,
+        )
+        decoder_attention_mask = torch.ones_like(decoder_input_ids)
+        inputs["decoder_input_ids"] = decoder_input_ids
+        inputs["decoder_attention_mask"] = decoder_attention_mask
 
         for _ in range(token_step - 1):
             with torch.no_grad():
-                next_token = self.model(**inputs).logits[:, -1, :].argmax(dim=-1, keepdim=True)
-            inputs["input_ids"] = torch.cat([inputs["input_ids"], next_token], dim=1)
-            if "attention_mask" in inputs:
-                next_attention = torch.ones_like(next_token, device=inputs["attention_mask"].device)
-                inputs["attention_mask"] = torch.cat(
-                    [inputs["attention_mask"], next_attention],
-                    dim=1,
-                )
+                next_token = self(**inputs).logits[:, -1, :].argmax(dim=-1, keepdim=True)
+            inputs["decoder_input_ids"] = torch.cat([inputs["decoder_input_ids"], next_token], dim=1)
+            next_attention = torch.ones_like(next_token)
+            inputs["decoder_attention_mask"] = torch.cat(
+                [inputs["decoder_attention_mask"], next_attention],
+                dim=1,
+            )
 
         return inputs
 
-    def generate_captions(
+    def image_question_inputs(
+        self,
+        image_path: str | Path,
+        question: str,
+    ) -> dict[str, torch.Tensor]:
+        image = Image.open(image_path).convert("RGB")
+        inputs = self.processor(image, question, return_tensors="pt")
+        return {key: value.to(self.device) for key, value in inputs.items()}
+
+    def answer(
         self,
         pixel_values: torch.Tensor,
-        max_new_tokens: int = 30,
-        prefix: str = DEFAULT_CAPTION_PREFIX,
+        question: str,
+        max_new_tokens: int = 10,
     ) -> list[str]:
-        generation_inputs = self.generation_inputs(pixel_values, prefix)
-
         with torch.no_grad():
             output_ids = self.model.generate(
-                **generation_inputs,
+                **self.question_inputs(pixel_values, question),
                 max_new_tokens=max_new_tokens,
             )
-
         return self.processor.batch_decode(output_ids, skip_special_tokens=True)
 
-    def softmax_entropy_token_mask(self, token_ids: torch.Tensor) -> torch.Tensor:
-        special_token_ids = set(self.processor.tokenizer.all_special_ids)
-        token_ids_cpu = token_ids.detach().cpu()
-        rows = []
-        for row in token_ids_cpu.tolist():
-            tokens = self.processor.tokenizer.convert_ids_to_tokens(row)
-            rows.append(
-                [
-                    token_id not in special_token_ids
-                    and token.replace("##", "").strip(" .,;:!?\"'()[]{}").lower()
-                    not in SOFTMAX_ENTROPY_STOPWORDS
-                    for token_id, token in zip(row, tokens)
-                ]
+    def answer_image(
+        self,
+        image_path: str | Path,
+        question: str,
+        max_new_tokens: int = 10,
+    ) -> str:
+        with torch.no_grad():
+            output_ids = self.model.generate(
+                **self.image_question_inputs(image_path, question),
+                max_new_tokens=max_new_tokens,
             )
-        return torch.tensor(rows, dtype=torch.bool, device=token_ids.device)
+        return self.processor.decode(output_ids[0], skip_special_tokens=True)
 
     def softmax_entropy(
         self,
         pixel_values: torch.Tensor,
-        max_new_tokens: int = 30,
-        prefix: str = DEFAULT_CAPTION_PREFIX,
-        exclude_stopwords: bool = False,
+        question: str,
+        max_new_tokens: int = 10,
     ) -> dict[str, torch.Tensor | list[str]]:
         if max_new_tokens < 1:
             raise ValueError(f"max_new_tokens must be at least 1, got {max_new_tokens}.")
 
-        self.model.eval()
+        return self.softmax_entropy_from_inputs(
+            self.question_inputs(pixel_values, question),
+            max_new_tokens,
+        )
 
+    def softmax_entropy_from_inputs(
+        self,
+        inputs: dict[str, torch.Tensor],
+        max_new_tokens: int,
+    ) -> dict[str, torch.Tensor | list[str]]:
         with torch.no_grad():
             outputs = self.model.generate(
-                **self.generation_inputs(pixel_values, prefix),
+                **inputs,
                 max_new_tokens=max_new_tokens,
                 return_dict_in_generate=True,
                 output_scores=True,
@@ -291,35 +323,37 @@ class BLIPWrapper(nn.Module):
                 probabilities * torch.log(probabilities.clamp_min(1e-12)),
                 dim=-1,
             )
-            generated_token_ids = outputs.sequences[:, -probabilities.shape[1] :]
-            token_mask = torch.ones_like(token_entropy, dtype=torch.bool)
-            if exclude_stopwords:
-                token_mask = self.softmax_entropy_token_mask(generated_token_ids)
-            token_count = token_mask.sum(dim=1)
-            masked_entropy = token_entropy.masked_fill(~token_mask, 0.0)
-            caption_uncertainty = masked_entropy.sum(dim=1) / token_count.clamp_min(1)
-            caption_uncertainty = torch.where(
-                token_count > 0,
-                caption_uncertainty,
-                token_entropy.mean(dim=1),
-            )
-            captions = self.processor.batch_decode(outputs.sequences, skip_special_tokens=True)
+            answer_uncertainty = token_entropy.mean(dim=1)
+            answers = self.processor.batch_decode(outputs.sequences, skip_special_tokens=True)
 
         return {
-            "caption_uncertainty": caption_uncertainty.detach().cpu(),
+            "answer_uncertainty": answer_uncertainty.detach().cpu(),
             "token_entropy": token_entropy.detach().cpu(),
-            "used_token_count": token_count.detach().cpu(),
-            "captions": captions,
+            "answers": answers,
             "generated_steps": torch.tensor(probabilities.shape[1]),
         }
+
+    def softmax_entropy_image(
+        self,
+        image_path: str | Path,
+        question: str,
+        max_new_tokens: int = 10,
+    ) -> dict[str, torch.Tensor | list[str]]:
+        if max_new_tokens < 1:
+            raise ValueError(f"max_new_tokens must be at least 1, got {max_new_tokens}.")
+
+        return self.softmax_entropy_from_inputs(
+            self.image_question_inputs(image_path, question),
+            max_new_tokens,
+        )
 
     def laplace_lora_topk_logits(
         self,
         pixel_values: torch.Tensor,
-        prefix: str = DEFAULT_CAPTION_PREFIX,
+        question: str,
     ) -> dict[str, list]:
-        if self.bayesian_lora_batch_size < 1:
-            raise ValueError("bayesian_lora_batch_size must be at least 1.")
+        if self.bayesian_lora_batch_size < 2:
+            raise ValueError("bayesian_lora_batch_size must be at least 2 for VQA Laplace-LoRA.")
         if pixel_values.shape[0] > self.bayesian_lora_batch_size:
             merged = {
                 "token_ids": [],
@@ -330,15 +364,19 @@ class BLIPWrapper(nn.Module):
             }
             for start in range(0, pixel_values.shape[0], self.bayesian_lora_batch_size):
                 end = start + self.bayesian_lora_batch_size
-                chunk = self.laplace_lora_topk_logits(pixel_values[start:end], prefix)
+                chunk = self.laplace_lora_topk_logits(pixel_values[start:end], question)
                 for key, value in chunk.items():
                     merged[key].extend(value)
             return merged
+        if pixel_values.shape[0] == 1:
+            duplicated = torch.cat([pixel_values, pixel_values], dim=0)
+            duplicated_output = self.laplace_lora_topk_logits(duplicated, question)
+            return {key: value[:1] for key, value in duplicated_output.items()}
 
         if self.bayesian_lora_factors is None:
             raise RuntimeError("Bayesian-LoRA factors are not loaded.")
-        if self.bayesian_lora_top_k < 1:
-            raise ValueError("bayesian_lora_top_k must be at least 1.")
+        if self.bayesian_lora_top_k < 2:
+            raise ValueError("bayesian_lora_top_k must be at least 2 for Laplace-LoRA.")
 
         try:
             from bayesian_lora import variance
@@ -349,12 +387,12 @@ class BLIPWrapper(nn.Module):
         self.model.eval()
         batch_inputs = self.inputs_for_token_step(
             pixel_values,
-            prefix,
+            question,
             self.bayesian_lora_token_step,
         )
 
         with torch.no_grad():
-            logits = self.model(**batch_inputs).logits[:, -1, :].float()
+            logits = self(**batch_inputs).logits[:, -1, :].float()
             topk = torch.topk(
                 logits,
                 k=min(self.bayesian_lora_top_k, logits.shape[-1]),
@@ -367,7 +405,7 @@ class BLIPWrapper(nn.Module):
 
         with torch.enable_grad():
             jacobian, mu = jacobian_mean(
-                self.model,
+                self,
                 batch_inputs,
                 output_callback=output_callback,
             )
@@ -389,7 +427,8 @@ class BLIPWrapper(nn.Module):
                 str(self.device),
             )
 
-        sigma = torch.sqrt(torch.diagonal(covariance, dim1=-2, dim2=-1).clamp_min(0.0))
+        variance_diag = torch.diagonal(covariance, dim1=-2, dim2=-1).clamp_min(0.0)
+        sigma = torch.sqrt(variance_diag)
         token_ids_cpu = token_ids.detach().cpu()
         tokens = [
             self.processor.tokenizer.convert_ids_to_tokens(row)
@@ -402,81 +441,5 @@ class BLIPWrapper(nn.Module):
             "tokens": tokens,
             "mu": mu.detach().cpu().tolist(),
             "sigma": sigma_cpu.tolist(),
-            "uncertainty": sigma_cpu.mean(dim=1).tolist(),
+            "uncertainty": sigma_cpu[:, 0].tolist(),
         }
-
-    def mc_dropout_predictive_entropy(
-        self,
-        pixel_values: torch.Tensor,
-        num_samples: int,
-        max_new_tokens: int = 2,
-        prefix: str = DEFAULT_CAPTION_PREFIX,
-    ) -> dict[str, torch.Tensor | list[str]]:
-        if num_samples < 1:
-            raise ValueError(f"num_samples must be at least 1, got {num_samples}.")
-
-        self.model.eval()
-        dropout_count = self.set_dropout_train_mode(True)
-        if dropout_count == 0:
-            raise RuntimeError("No Dropout modules found for MC-dropout inference.")
-
-        probability_sum = None
-        sample_captions = []
-        generated_steps = None
-
-        with torch.no_grad():
-            for _ in range(num_samples):
-                outputs = self.model.generate(
-                    **self.generation_inputs(pixel_values, prefix),
-                    max_new_tokens=max_new_tokens,
-                    min_new_tokens=max_new_tokens,
-                    return_dict_in_generate=True,
-                    output_scores=True,
-                )
-                probabilities = torch.stack(
-                    [torch.softmax(score.float(), dim=-1) for score in outputs.scores],
-                    dim=1,
-                )
-                probability_sum = (
-                    probabilities
-                    if probability_sum is None
-                    else probability_sum + probabilities
-                )
-                generated_steps = probabilities.shape[1]
-                sample_captions.append(
-                    self.processor.batch_decode(outputs.sequences, skip_special_tokens=True)
-                )
-
-        self.model.eval()
-
-        mean_probabilities = probability_sum / num_samples
-        token_entropy = -torch.sum(
-            mean_probabilities * torch.log(mean_probabilities.clamp_min(1e-12)),
-            dim=-1,
-        )
-        caption_uncertainty = token_entropy.mean(dim=1)
-
-        return {
-            "caption_uncertainty": caption_uncertainty.detach().cpu(),
-            "token_entropy": token_entropy.detach().cpu(),
-            "sample_captions": sample_captions,
-            "generated_steps": torch.tensor(generated_steps),
-        }
-
-    def vision_outputs(self, pixel_values: torch.Tensor) -> object:
-        pixel_values = pixel_values.to(self.device)
-
-        with torch.no_grad():
-            return self.model.vision_model(
-                pixel_values=pixel_values,
-                return_dict=True,
-            )
-
-    def vision_embedding(
-        self,
-        pixel_values: torch.Tensor,
-        output: Literal["last_hidden_state", "pooler_output"] = "last_hidden_state",
-    ) -> torch.Tensor:
-        outputs = self.vision_outputs(pixel_values)
-        embedding = getattr(outputs, output)
-        return embedding.detach().cpu()

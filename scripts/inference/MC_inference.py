@@ -6,13 +6,13 @@ from tqdm import tqdm
 
 from vlm_uncertainty.data.blip_inputs import build_blip_image_dataloader
 from vlm_uncertainty.data.imagenet import load_downloaded_imagenet
-from vlm_uncertainty.models.blip import BLIPWrapper, DEFAULT_CAPTION_PREFIX
+from vlm_uncertainty.models.blip import BLIPWrapper
 
 
 DATASET_DIR = Path("data/output/ninco/textures")
 OUTPUT_PATH = Path("outputs/mc_dropout/mc_dropout_uncertainty.csv")
 CHECKPOINT = "Salesforce/blip-image-captioning-base"
-PREFIX = DEFAULT_CAPTION_PREFIX
+PREFIX = "This is a photo of a"
 MAX_NEW_TOKENS = 2
 DROPOUT_PROB = 0.1
 

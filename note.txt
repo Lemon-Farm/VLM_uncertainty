@@ -1,0 +1,9 @@
+BLoRA
+ID mean uncertainty: 0.876302
+OOD mean uncertainty: 1.058009
+
+Top-2 logit gap
+For the Bayesian-LoRA top-2 logits, define the mean logit gap as
+gap = mu_1 - mu_2, where mu_1 and mu_2 are the predictive means of the
+first- and second-ranked tokens. Smaller gap values mean the top-1 and
+top-2 candidates are closer and the top-1 prediction is less stable.

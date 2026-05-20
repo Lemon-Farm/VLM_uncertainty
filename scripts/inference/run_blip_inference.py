@@ -3,9 +3,38 @@ import argparse
 from vlm_uncertainty.data.blip_inputs import build_blip_image_dataloader
 from vlm_uncertainty.data.imagenet import load_downloaded_imagenet
 from vlm_uncertainty.evaluation.runner import run_caption_inference
-from vlm_uncertainty.models.blip import BLIPWrapper, DEFAULT_CAPTION_PREFIX
+from vlm_uncertainty.models.blip import BLIPWrapper
 
-DATA_PATH = "data/output/ninco/textures"
+dataset = ("data/output/imagenet/validation", "data/output/ninco/textures")
+
+# Base
+DEFAULT_DATA_PATH = dataset[1]
+DEFAULT_OUTPUT_PATH = "outputs/captions.jsonl"
+DEFAULT_CHECKPOINT = "Salesforce/blip-image-captioning-base"
+DEFAULT_IMAGE_KEY = "image"
+DEFAULT_MAX_NEW_TOKENS = 3
+DEFAULT_DEVICE = None
+DEFAULT_PREFIX = "This is a photo of a"
+DEFAULT_BATCH_SIZE = 64
+DEFAULT_NUM_WORKERS = 0
+DEFAULT_COMPUTE_SOFTMAX_ENTROPY = True
+DEFAULT_EXCLUDE_SOFTMAX_ENTROPY_STOPWORDS = False
+
+# Bayesian-LoRA
+DEFAULT_LORA_ADAPTER = None #"diyanigam/lora-blip-finetuned"
+DEFAULT_BAYESIAN_LORA_FACTORS = None #"outputs/bayesian_lora/kronecker_factors.pt"
+DEFAULT_BAYESIAN_LORA_PRIOR_VAR = 1.0
+DEFAULT_BAYESIAN_LORA_TOP_K = 2
+DEFAULT_BAYESIAN_LORA_TOKEN_STEP = 2
+DEFAULT_BAYESIAN_LORA_BATCH_SIZE = 2
+DEFAULT_BAYESIAN_LORA_N_LORA = None
+DEFAULT_BAYESIAN_LORA_N_KFAC = None
+
+# Mahalanobis
+DEFAULT_EXTRACT_VISION_EMBEDDINGS = False
+
+# MC-dropout
+DEFAULT_FORCE_DROPOUT_PROB = None # 0.1
 
 
 def zero_one_to_bool(value: str) -> bool:
@@ -18,45 +47,27 @@ def zero_one_to_bool(value: str) -> bool:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run BLIP captioning on a saved ImageNet dataset.")
-    parser.add_argument(
-        "--dataset-dir",
-        default=DATA_PATH,
-        help="Path to a dataset saved by scripts/prepare/prepare_imagenet.py.",
-    )
-    parser.add_argument("--output", default="outputs/captions.jsonl")
-    parser.add_argument("--checkpoint", default="Salesforce/blip-image-captioning-base")
-    parser.add_argument(
-        "--lora-adapter",
-        default="diyanigam/lora-blip-finetuned",
-        help="Optional LoRA adapter path or Hugging Face repo id.",
-    )
-    parser.add_argument(
-        "--bayesian-lora-factors",
-        default="outputs/bayesian_lora/kronecker_factors_ID.pt",
-        help="Optional path to saved Bayesian-LoRA Kronecker factors.",
-    )
-    parser.add_argument("--bayesian-lora-prior-var", type=float, default=1.0)
-    parser.add_argument("--bayesian-lora-top-k", type=int, default=5)
-    parser.add_argument("--bayesian-lora-n-lora", type=int, default=None)
-    parser.add_argument("--bayesian-lora-n-kfac", type=int, default=None)
-    parser.add_argument("--image-key", default="image")
-    parser.add_argument("--device", default=None, help="Device to use, e.g. cpu or cuda.")
-    parser.add_argument("--max-new-tokens", type=int, default=2)
-    parser.add_argument("--prefix", default=DEFAULT_CAPTION_PREFIX)
-    parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--num-workers", type=int, default=0)
-    parser.add_argument(
-        "--extract-vision-embeddings",
-        type=zero_one_to_bool,
-        default=False,
-        help="Set 1 to save BLIP vision embeddings to one CSV file, 0 otherwise.",
-    )
-    parser.add_argument(
-        "--force-dropout-prob",
-        type=float,
-        default=0.1,
-        help="If set, force every Dropout module in BLIP to this probability, e.g. 0.1.",
-    )
+    parser.add_argument("--dataset-dir", default=DEFAULT_DATA_PATH)
+    parser.add_argument("--output", default=DEFAULT_OUTPUT_PATH)
+    parser.add_argument("--checkpoint", default=DEFAULT_CHECKPOINT)
+    parser.add_argument("--lora-adapter", default=DEFAULT_LORA_ADAPTER)
+    parser.add_argument("--bayesian-lora-factors", default=DEFAULT_BAYESIAN_LORA_FACTORS)
+    parser.add_argument("--bayesian-lora-prior-var", type=float, default=DEFAULT_BAYESIAN_LORA_PRIOR_VAR)
+    parser.add_argument("--bayesian-lora-top-k", type=int, default=DEFAULT_BAYESIAN_LORA_TOP_K)
+    parser.add_argument("--bayesian-lora-token-step", type=int, default=DEFAULT_BAYESIAN_LORA_TOKEN_STEP)
+    parser.add_argument("--bayesian-lora-batch-size", type=int, default=DEFAULT_BAYESIAN_LORA_BATCH_SIZE)
+    parser.add_argument("--bayesian-lora-n-lora", type=int, default=DEFAULT_BAYESIAN_LORA_N_LORA)
+    parser.add_argument("--bayesian-lora-n-kfac", type=int, default=DEFAULT_BAYESIAN_LORA_N_KFAC)
+    parser.add_argument("--image-key", default=DEFAULT_IMAGE_KEY)
+    parser.add_argument("--device", default=DEFAULT_DEVICE)
+    parser.add_argument("--max-new-tokens", type=int, default=DEFAULT_MAX_NEW_TOKENS)
+    parser.add_argument("--prefix", default=DEFAULT_PREFIX)
+    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
+    parser.add_argument("--num-workers", type=int, default=DEFAULT_NUM_WORKERS)
+    parser.add_argument("--compute-softmax-entropy", type=zero_one_to_bool, default=DEFAULT_COMPUTE_SOFTMAX_ENTROPY)
+    parser.add_argument("--exclude-softmax-entropy-stopwords", type=zero_one_to_bool, default=DEFAULT_EXCLUDE_SOFTMAX_ENTROPY_STOPWORDS)
+    parser.add_argument("--extract-vision-embeddings", type=zero_one_to_bool, default=DEFAULT_EXTRACT_VISION_EMBEDDINGS)
+    parser.add_argument("--force-dropout-prob", type=float, default=DEFAULT_FORCE_DROPOUT_PROB)
     return parser.parse_args()
 
 
@@ -79,6 +90,8 @@ def main() -> None:
         bayesian_lora_factors=args.bayesian_lora_factors,
         bayesian_lora_prior_var=args.bayesian_lora_prior_var,
         bayesian_lora_top_k=args.bayesian_lora_top_k,
+        bayesian_lora_token_step=args.bayesian_lora_token_step,
+        bayesian_lora_batch_size=args.bayesian_lora_batch_size,
         bayesian_lora_n_lora=args.bayesian_lora_n_lora,
         bayesian_lora_n_kfac=args.bayesian_lora_n_kfac,
     )
@@ -88,6 +101,8 @@ def main() -> None:
         output_path=args.output,
         max_new_tokens=args.max_new_tokens,
         prefix=args.prefix,
+        compute_softmax_entropy=args.compute_softmax_entropy,
+        exclude_softmax_entropy_stopwords=args.exclude_softmax_entropy_stopwords,
     )
 
 
