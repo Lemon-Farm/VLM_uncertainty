@@ -3,7 +3,7 @@ import argparse
 from vlm_uncertainty.data.blip_inputs import build_blip_image_dataloader
 from vlm_uncertainty.data.imagenet import load_downloaded_imagenet
 from vlm_uncertainty.evaluation.runner import run_caption_inference
-from vlm_uncertainty.models.blip import BLIPWrapper, DEFAULT_CAPTION_PREFIX
+from vlm_uncertainty.models.blip import BLIPWrapper
 
 dataset = ("data/output/imagenet/validation", "data/output/ninco/textures")
 
@@ -14,7 +14,7 @@ DEFAULT_CHECKPOINT = "Salesforce/blip-image-captioning-base"
 DEFAULT_IMAGE_KEY = "image"
 DEFAULT_MAX_NEW_TOKENS = 3
 DEFAULT_DEVICE = None
-DEFAULT_PREFIX = DEFAULT_CAPTION_PREFIX
+DEFAULT_PREFIX = "This is a photo of a"
 DEFAULT_BATCH_SIZE = 64
 DEFAULT_NUM_WORKERS = 0
 DEFAULT_COMPUTE_SOFTMAX_ENTROPY = True

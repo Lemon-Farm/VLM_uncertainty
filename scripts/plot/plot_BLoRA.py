@@ -8,8 +8,8 @@ import numpy as np
 from sklearn.metrics import auc, roc_curve
 
 
-DEFAULT_ID_PATH = Path("outputs/captions_ID.jsonl")
-DEFAULT_OOD_PATH = Path("outputs/captions_OOD.jsonl")
+DEFAULT_ID_PATH = Path("outputs/blip_vqa_answers_ID.jsonl")
+DEFAULT_OOD_PATH = Path("outputs/blip_vqa_answers_OOD.jsonl")
 DEFAULT_OUTPUT_DIR = Path("reports/figures")
 DEFAULT_OUTPUT_NAME = "blora_uncertainty_violin.png"
 UNCERTAINTY_PATTERN = re.compile(r'"uncertainty"\s*:\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)')
